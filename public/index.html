@@ -1,105 +1,145 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>3D Battle Arena</title>
+    <title>FPS Render Online</title>
     <style>
-        body { margin: 0; overflow: hidden; font-family: sans-serif; }
-        #menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; text-align: center; }
-        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #overlay { position: absolute; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; z-index: 100; }
+        .btn { padding: 15px; margin: 10px; width: 250px; cursor: pointer; background: #111; color: #0f0; border: 2px solid #0f0; font-weight: bold; }
+        #ui { position: absolute; bottom: 20px; left: 20px; color: #0f0; font-size: 24px; pointer-events: none; text-shadow: 2px 2px #000; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 10px; height: 10px; border: 2px solid white; border-radius: 50%; transform: translate(-50%, -50%); }
     </style>
 </head>
 <body>
-    <div id="menu">
-        <h1>Selecciona Clase</h1>
-        <button onclick="startGame('Medico')">Médico (70HP - Veloz)</button>
-        <button onclick="startGame('Base')">Base (100HP - Equilibrado)</button>
-        <button onclick="startGame('Grandullon')">Grandullón (115HP - Lento)</button>
+    <div id="overlay">
+        <h1>3D SHOOTER ONLINE</h1>
+        <p>Haz clic para empezar y usa WASD para moverte</p>
+        <button class="btn" onclick="join('Medico')">MÉDICO (Rápido / 30 DMG)</button>
+        <button class="btn" onclick="join('Base')">BASE (Normal / 15 DMG)</button>
+        <button class="btn" onclick="join('Grandullon')">GRANDULLÓN (Lento / 5 DMG)</button>
     </div>
+    <div id="crosshair"></div>
+    <div id="ui">HP: <span id="hp">100</span> | <span id="cls">-</span></div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="/socket.io/socket.io.js"></script>
 
     <script>
-        let scene, camera, renderer, socket;
-        let remotePlayers = {};
-        let localPlayerMesh;
-        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let scene, camera, renderer, socket, localId, myData;
+        let remotePlayers = {}, obstacles = [];
+        const raycaster = new THREE.Raycaster();
+        const keys = {};
+        let pitch = 0, yaw = 0;
 
-        function init3D() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87ceeb);
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        function join(clase) {
+            document.getElementById('overlay').style.display = 'none';
+            document.body.requestPointerLock();
+            socket = io();
             
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({antialias: true});
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Suelo
-            const grid = new THREE.GridHelper(100, 50);
+            // Luces y Suelo
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
+            const grid = new THREE.GridHelper(100, 50, 0x00ff00, 0x222222);
             scene.add(grid);
-            const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshPhongMaterial({color: 0x333333}));
-            floor.rotation.x = -Math.PI/2;
-            scene.add(floor);
 
-            const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
-            scene.add(light);
+            // CREAR OBSTÁCULOS (Muros)
+            for(let i=0; i<15; i++) {
+                const h = Math.random() * 5 + 2;
+                const wall = new THREE.Mesh(
+                    new THREE.BoxGeometry(4, h, 4),
+                    new THREE.MeshPhongMaterial({color: 0x444444})
+                );
+                wall.position.set(Math.random()*60-30, h/2, Math.random()*60-30);
+                scene.add(wall);
+                obstacles.push(wall);
+            }
 
-            camera.position.set(0, 5, 10);
+            socket.emit('joinGame', { class: clase });
+
+            socket.on('init', data => {
+                localId = data.id;
+                myData = data.players[localId];
+                document.getElementById('hp').innerText = myData.hp;
+                document.getElementById('cls').innerText = myData.class;
+                Object.keys(data.players).forEach(id => { if(id !== localId) spawnRemote(data.players[id]); });
+            });
+
+            socket.on('newPlayer', spawnRemote);
+            socket.on('playerMoved', d => {
+                if(remotePlayers[d.id]) {
+                    remotePlayers[d.id].position.set(d.x, 1, d.z);
+                    remotePlayers[d.id].rotation.y = d.ry;
+                }
+            });
+            socket.on('updateHP', d => { if(d.id === localId) document.getElementById('hp').innerText = d.hp; });
+            socket.on('respawn', d => { if(d.id === localId) { myData.x = d.x; myData.z = d.z; myData.hp = 100; }});
+            socket.on('removePlayer', id => { scene.remove(remotePlayers[id]); delete remotePlayers[id]; });
+
+            window.addEventListener('keydown', e => keys[e.code] = true);
+            window.addEventListener('keyup', e => keys[e.code] = false);
+            window.addEventListener('mousemove', e => {
+                if(document.pointerLockElement) {
+                    yaw -= e.movementX * 0.002;
+                    pitch -= e.movementY * 0.002;
+                    pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch));
+                }
+            });
+            window.addEventListener('mousedown', () => {
+                if(document.pointerLockElement) shoot();
+                else document.body.requestPointerLock();
+            });
+
             animate();
         }
 
-        function startGame(className) {
-            document.getElementById('menu').style.display = 'none';
-            socket = io();
-            init3D();
-
-            socket.emit('joinGame', { class: className });
-
-            // Crear nuestro personaje (un cubo por ahora)
-            const geo = new THREE.BoxGeometry(1, 2, 1);
-            const mat = new THREE.MeshPhongMaterial({ color: className === 'Medico' ? 0x00ff00 : (className === 'Base' ? 0x0000ff : 0xff0000) });
-            localPlayerMesh = new THREE.Mesh(geo, mat);
-            localPlayerMesh.position.y = 1;
-            scene.add(localPlayerMesh);
-
-            setupControls();
+        function spawnRemote(d) {
+            const m = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshPhongMaterial({color: d.color}));
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshPhongMaterial({color: 0xffffff}));
+            head.position.set(0, 0.8, -0.3);
+            m.add(body, head);
+            m.position.set(d.x, 1, d.z);
+            m.userData.id = d.id;
+            scene.add(m);
+            remotePlayers[d.id] = m;
         }
 
-        function setupControls() {
-            window.addEventListener('keydown', (e) => {
-                if(e.code === 'KeyW') moveForward = true;
-                if(e.code === 'KeyS') moveBackward = true;
-                if(e.code === 'KeyA') moveLeft = true;
-                if(e.code === 'KeyD') moveRight = true;
-            });
-            window.addEventListener('keyup', (e) => {
-                if(e.code === 'KeyW') moveForward = false;
-                if(e.code === 'KeyS') moveBackward = false;
-                if(e.code === 'KeyA') moveLeft = false;
-                if(e.code === 'KeyD') moveRight = false;
-            });
+        function shoot() {
+            raycaster.setFromCamera({x: 0, y: 0}, camera);
+            const targets = Object.values(remotePlayers);
+            const intersects = raycaster.intersectObjects(targets, true);
+            if(intersects.length > 0) {
+                let obj = intersects[0].object;
+                while(obj.parent && !obj.userData.id) obj = obj.parent;
+                if(obj.userData.id) socket.emit('shoot', obj.userData.id);
+            }
         }
 
         function animate() {
             requestAnimationFrame(animate);
-            
-            if(localPlayerMesh) {
-                if(moveForward) localPlayerMesh.position.z -= 0.1;
-                if(moveBackward) localPlayerMesh.position.z += 0.1;
-                if(moveLeft) localPlayerMesh.position.x -= 0.1;
-                if(moveRight) localPlayerMesh.position.x += 0.1;
+            if(myData) {
+                const dirX = Math.sin(yaw);
+                const dirZ = Math.cos(yaw);
 
-                camera.position.x = localPlayerMesh.position.x;
-                camera.position.z = localPlayerMesh.position.z + 10;
-                camera.lookAt(localPlayerMesh.position);
+                if(keys['KeyW']) { myData.x -= dirX * myData.speed; myData.z -= dirZ * myData.speed; }
+                if(keys['KeyS']) { myData.x += dirX * myData.speed; myData.z += dirZ * myData.speed; }
+                if(keys['KeyA']) { myData.x -= dirZ * myData.speed; myData.z += dirX * myData.speed; }
+                if(keys['KeyD']) { myData.x += dirZ * myData.speed; myData.z -= dirX * myData.speed; }
 
-                socket.emit('playerMovement', { x: localPlayerMesh.position.x, z: localPlayerMesh.position.z });
+                camera.position.set(myData.x, 1.8, myData.z);
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
+
+                socket.emit('move', {x: myData.x, z: myData.z, ry: yaw});
             }
-
             renderer.render(scene, camera);
         }
-
-        // Aquí irían los listeners de socket.on('playerMoved') para dibujar a los demás...
     </script>
 </body>
 </html>
