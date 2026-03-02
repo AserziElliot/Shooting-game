@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Shooter Render</title>
+    <style>
+        body { margin: 0; background: #050505; color: white; font-family: sans-serif; overflow: hidden; }
+        canvas { display: block; background: radial-gradient(circle, #111 0%, #000 100%); }
+        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+        .stat { font-size: 20px; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div class="stat">Puntos: <span id="score">0</span></div>
+        <div class="stat">Vidas: <span id="lives">3</span></div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const livesEl = document.getElementById('lives');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        let score = 0;
+        let lives = 3;
+        let gameActive = true;
+
+        // --- Clases ---
+        class Player {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height - 50;
+                this.w = 40;
+                this.h = 40;
+                this.speed = 7;
+            }
+            draw() {
+                ctx.fillStyle = '#00ffcc';
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x - this.w/2, this.y + this.h);
+                ctx.lineTo(this.x + this.w/2, this.y + this.h);
+                ctx.fill();
+            }
+        }
+
+        class Projectile {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.radius = 4;
+                this.speed = 10;
+            }
+            draw() {
+                ctx.fillStyle = '#ffff00';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            update() { this.y -= this.speed; }
+        }
+
+        class Enemy {
+            constructor() {
+                this.x = Math.random() * (canvas.width - 30) + 15;
+                this.y = -30;
+                this.w = 30;
+                this.h = 30;
+                this.speed = Math.random() * 2 + 2;
+            }
+            draw() {
+                ctx.fillStyle = '#ff4444';
+                ctx.fillRect(this.x - this.w/2, this.y, this.w, this.h);
+            }
+            update() { this.y += this.speed; }
+        }
+
+        // --- Instancias y Controles ---
+        const player = new Player();
+        const projectiles = [];
+        const enemies = [];
+        const keys = {};
+
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+        window.addEventListener('mousedown', () => {
+            if(gameActive) projectiles.push(new Projectile(player.x, player.y));
+        });
+
+        function spawnEnemy() {
+            if(gameActive) {
+                enemies.push(new Enemy());
+                setTimeout(spawnEnemy, 1000 - Math.min(score * 5, 700));
+            }
+        }
+
+        // --- Bucle Principal ---
+        function animate() {
+            if(!gameActive) return;
+            requestAnimationFrame(animate);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Movimiento jugador
+            if (keys['ArrowLeft'] && player.x > 20) player.x -= player.speed;
+            if (keys['ArrowRight'] && player.x < canvas.width - 20) player.x += player.speed;
+            player.draw();
+
+            // Proyectiles
+            projectiles.forEach((p, pi) => {
+                p.update();
+                p.draw();
+                if(p.y < 0) projectiles.splice(pi, 1);
+            });
+
+            // Enemigos
+            enemies.forEach((e, ei) => {
+                e.update();
+                e.draw();
+
+                // Colisión con jugador
+                if (e.y + e.h > player.y && Math.abs(e.x - player.x) < 30) {
+                    enemies.splice(ei, 1);
+                    lives--;
+                    livesEl.innerText = lives;
+                    if(lives <= 0) {
+                        gameActive = false;
+                        alert("Game Over - Puntuación: " + score);
+                        location.reload();
+                    }
+                }
+
+                // Colisión con proyectiles
+                projectiles.forEach((p, pi) => {
+                    if (p.x > e.x - e.w/2 && p.x < e.x + e.w/2 && p.y > e.y && p.y < e.y + e.h) {
+                        enemies.splice(ei, 1);
+                        projectiles.splice(pi, 1);
+                        score += 10;
+                        scoreEl.innerText = score;
+                    }
+                });
+
+                if(e.y > canvas.height) enemies.splice(ei, 1);
+            });
+        }
+
+        spawnEnemy();
+        animate();
+    </script>
+</body>
+</html>
