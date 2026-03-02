@@ -1,158 +1,105 @@
 <!DOCTYPE html>
-<html lang="es">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Space Shooter Render</title>
+    <title>3D Battle Arena</title>
     <style>
-        body { margin: 0; background: #050505; color: white; font-family: sans-serif; overflow: hidden; }
-        canvas { display: block; background: radial-gradient(circle, #111 0%, #000 100%); }
-        #ui { position: absolute; top: 10px; left: 10px; pointer-events: none; }
-        .stat { font-size: 20px; margin-bottom: 5px; }
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; text-align: center; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
     </style>
 </head>
 <body>
-
-    <div id="ui">
-        <div class="stat">Puntos: <span id="score">0</span></div>
-        <div class="stat">Vidas: <span id="lives">3</span></div>
+    <div id="menu">
+        <h1>Selecciona Clase</h1>
+        <button onclick="startGame('Medico')">Médico (70HP - Veloz)</button>
+        <button onclick="startGame('Base')">Base (100HP - Equilibrado)</button>
+        <button onclick="startGame('Grandullon')">Grandullón (115HP - Lento)</button>
     </div>
 
-    <canvas id="gameCanvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
 
     <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-        const scoreEl = document.getElementById('score');
-        const livesEl = document.getElementById('lives');
+        let scene, camera, renderer, socket;
+        let remotePlayers = {};
+        let localPlayerMesh;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+        function init3D() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
 
-        let score = 0;
-        let lives = 3;
-        let gameActive = true;
+            // Suelo
+            const grid = new THREE.GridHelper(100, 50);
+            scene.add(grid);
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshPhongMaterial({color: 0x333333}));
+            floor.rotation.x = -Math.PI/2;
+            scene.add(floor);
 
-        // --- Clases ---
-        class Player {
-            constructor() {
-                this.x = canvas.width / 2;
-                this.y = canvas.height - 50;
-                this.w = 40;
-                this.h = 40;
-                this.speed = 7;
-            }
-            draw() {
-                ctx.fillStyle = '#00ffcc';
-                ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
-                ctx.lineTo(this.x - this.w/2, this.y + this.h);
-                ctx.lineTo(this.x + this.w/2, this.y + this.h);
-                ctx.fill();
-            }
+            const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+            scene.add(light);
+
+            camera.position.set(0, 5, 10);
+            animate();
         }
 
-        class Projectile {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                this.radius = 4;
-                this.speed = 10;
-            }
-            draw() {
-                ctx.fillStyle = '#ffff00';
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            update() { this.y -= this.speed; }
+        function startGame(className) {
+            document.getElementById('menu').style.display = 'none';
+            socket = io();
+            init3D();
+
+            socket.emit('joinGame', { class: className });
+
+            // Crear nuestro personaje (un cubo por ahora)
+            const geo = new THREE.BoxGeometry(1, 2, 1);
+            const mat = new THREE.MeshPhongMaterial({ color: className === 'Medico' ? 0x00ff00 : (className === 'Base' ? 0x0000ff : 0xff0000) });
+            localPlayerMesh = new THREE.Mesh(geo, mat);
+            localPlayerMesh.position.y = 1;
+            scene.add(localPlayerMesh);
+
+            setupControls();
         }
 
-        class Enemy {
-            constructor() {
-                this.x = Math.random() * (canvas.width - 30) + 15;
-                this.y = -30;
-                this.w = 30;
-                this.h = 30;
-                this.speed = Math.random() * 2 + 2;
-            }
-            draw() {
-                ctx.fillStyle = '#ff4444';
-                ctx.fillRect(this.x - this.w/2, this.y, this.w, this.h);
-            }
-            update() { this.y += this.speed; }
+        function setupControls() {
+            window.addEventListener('keydown', (e) => {
+                if(e.code === 'KeyW') moveForward = true;
+                if(e.code === 'KeyS') moveBackward = true;
+                if(e.code === 'KeyA') moveLeft = true;
+                if(e.code === 'KeyD') moveRight = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if(e.code === 'KeyW') moveForward = false;
+                if(e.code === 'KeyS') moveBackward = false;
+                if(e.code === 'KeyA') moveLeft = false;
+                if(e.code === 'KeyD') moveRight = false;
+            });
         }
 
-        // --- Instancias y Controles ---
-        const player = new Player();
-        const projectiles = [];
-        const enemies = [];
-        const keys = {};
-
-        window.addEventListener('keydown', e => keys[e.code] = true);
-        window.addEventListener('keyup', e => keys[e.code] = false);
-        window.addEventListener('mousedown', () => {
-            if(gameActive) projectiles.push(new Projectile(player.x, player.y));
-        });
-
-        function spawnEnemy() {
-            if(gameActive) {
-                enemies.push(new Enemy());
-                setTimeout(spawnEnemy, 1000 - Math.min(score * 5, 700));
-            }
-        }
-
-        // --- Bucle Principal ---
         function animate() {
-            if(!gameActive) return;
             requestAnimationFrame(animate);
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if(localPlayerMesh) {
+                if(moveForward) localPlayerMesh.position.z -= 0.1;
+                if(moveBackward) localPlayerMesh.position.z += 0.1;
+                if(moveLeft) localPlayerMesh.position.x -= 0.1;
+                if(moveRight) localPlayerMesh.position.x += 0.1;
 
-            // Movimiento jugador
-            if (keys['ArrowLeft'] && player.x > 20) player.x -= player.speed;
-            if (keys['ArrowRight'] && player.x < canvas.width - 20) player.x += player.speed;
-            player.draw();
+                camera.position.x = localPlayerMesh.position.x;
+                camera.position.z = localPlayerMesh.position.z + 10;
+                camera.lookAt(localPlayerMesh.position);
 
-            // Proyectiles
-            projectiles.forEach((p, pi) => {
-                p.update();
-                p.draw();
-                if(p.y < 0) projectiles.splice(pi, 1);
-            });
+                socket.emit('playerMovement', { x: localPlayerMesh.position.x, z: localPlayerMesh.position.z });
+            }
 
-            // Enemigos
-            enemies.forEach((e, ei) => {
-                e.update();
-                e.draw();
-
-                // Colisión con jugador
-                if (e.y + e.h > player.y && Math.abs(e.x - player.x) < 30) {
-                    enemies.splice(ei, 1);
-                    lives--;
-                    livesEl.innerText = lives;
-                    if(lives <= 0) {
-                        gameActive = false;
-                        alert("Game Over - Puntuación: " + score);
-                        location.reload();
-                    }
-                }
-
-                // Colisión con proyectiles
-                projectiles.forEach((p, pi) => {
-                    if (p.x > e.x - e.w/2 && p.x < e.x + e.w/2 && p.y > e.y && p.y < e.y + e.h) {
-                        enemies.splice(ei, 1);
-                        projectiles.splice(pi, 1);
-                        score += 10;
-                        scoreEl.innerText = score;
-                    }
-                });
-
-                if(e.y > canvas.height) enemies.splice(ei, 1);
-            });
+            renderer.render(scene, camera);
         }
 
-        spawnEnemy();
-        animate();
+        // Aquí irían los listeners de socket.on('playerMoved') para dibujar a los demás...
     </script>
 </body>
 </html>
