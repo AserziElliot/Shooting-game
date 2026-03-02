@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Battle Arena</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; text-align: center; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1>Selecciona Clase</h1>
+        <button onclick="startGame('Medico')">Médico (70HP - Veloz)</button>
+        <button onclick="startGame('Base')">Base (100HP - Equilibrado)</button>
+        <button onclick="startGame('Grandullon')">Grandullón (115HP - Lento)</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script>
+        let scene, camera, renderer, socket;
+        let remotePlayers = {};
+        let localPlayerMesh;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+
+        function init3D() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Suelo
+            const grid = new THREE.GridHelper(100, 50);
+            scene.add(grid);
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshPhongMaterial({color: 0x333333}));
+            floor.rotation.x = -Math.PI/2;
+            scene.add(floor);
+
+            const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+            scene.add(light);
+
+            camera.position.set(0, 5, 10);
+            animate();
+        }
+
+        function startGame(className) {
+            document.getElementById('menu').style.display = 'none';
+            socket = io();
+            init3D();
+
+            socket.emit('joinGame', { class: className });
+
+            // Crear nuestro personaje (un cubo por ahora)
+            const geo = new THREE.BoxGeometry(1, 2, 1);
+            const mat = new THREE.MeshPhongMaterial({ color: className === 'Medico' ? 0x00ff00 : (className === 'Base' ? 0x0000ff : 0xff0000) });
+            localPlayerMesh = new THREE.Mesh(geo, mat);
+            localPlayerMesh.position.y = 1;
+            scene.add(localPlayerMesh);
+
+            setupControls();
+        }
+
+        function setupControls() {
+            window.addEventListener('keydown', (e) => {
+                if(e.code === 'KeyW') moveForward = true;
+                if(e.code === 'KeyS') moveBackward = true;
+                if(e.code === 'KeyA') moveLeft = true;
+                if(e.code === 'KeyD') moveRight = true;
+            });
+            window.addEventListener('keyup', (e) => {
+                if(e.code === 'KeyW') moveForward = false;
+                if(e.code === 'KeyS') moveBackward = false;
+                if(e.code === 'KeyA') moveLeft = false;
+                if(e.code === 'KeyD') moveRight = false;
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if(localPlayerMesh) {
+                if(moveForward) localPlayerMesh.position.z -= 0.1;
+                if(moveBackward) localPlayerMesh.position.z += 0.1;
+                if(moveLeft) localPlayerMesh.position.x -= 0.1;
+                if(moveRight) localPlayerMesh.position.x += 0.1;
+
+                camera.position.x = localPlayerMesh.position.x;
+                camera.position.z = localPlayerMesh.position.z + 10;
+                camera.lookAt(localPlayerMesh.position);
+
+                socket.emit('playerMovement', { x: localPlayerMesh.position.x, z: localPlayerMesh.position.z });
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Aquí irían los listeners de socket.on('playerMoved') para dibujar a los demás...
+    </script>
+</body>
+</html>
